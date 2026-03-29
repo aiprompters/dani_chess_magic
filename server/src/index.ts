@@ -1,10 +1,20 @@
+import dotenv from 'dotenv';
+import path from 'path';
+
+// Load .env from project root - try multiple locations
+dotenv.config({ path: path.resolve(process.cwd(), '.env') });
+dotenv.config({ path: path.resolve(__dirname, '../../.env') });
+dotenv.config({ path: path.resolve(__dirname, '../../../../.env') });
+
 import express from 'express';
 import { createServer } from 'http';
 import { Server } from 'socket.io';
 import cors from 'cors';
-import path from 'path';
 import { GameRoom } from './GameRoom';
+import { analyzeBoardImage } from './boardRecognition';
 import { ServerToClientEvents, ClientToServerEvents, TimerConfig } from '../../shared/types';
+
+const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 
 const app = express();
 const httpServer = createServer(app);
@@ -17,6 +27,28 @@ const io = new Server<ClientToServerEvents, ServerToClientEvents>(httpServer, {
 });
 
 app.use(cors());
+app.use(express.json({ limit: '10mb' }));
+
+// Board recognition endpoint
+app.post('/api/recognize-board', async (req, res) => {
+  if (!OPENAI_API_KEY) {
+    return res.status(500).json({ error: 'OPENAI_API_KEY ist nicht konfiguriert' });
+  }
+
+  const { image } = req.body;
+  if (!image) {
+    return res.status(400).json({ error: 'Bild erforderlich' });
+  }
+
+  try {
+    const base64 = image.replace(/^data:image\/\w+;base64,/, '');
+    const fen = await analyzeBoardImage(base64, OPENAI_API_KEY);
+    res.json({ fen });
+  } catch (err: any) {
+    console.error('Board recognition error:', err);
+    res.status(500).json({ error: err.message || 'Fehler bei der Bilderkennung' });
+  }
+});
 
 // Serve static client files in production
 if (process.env.NODE_ENV === 'production') {

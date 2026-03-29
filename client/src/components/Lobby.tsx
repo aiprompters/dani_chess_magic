@@ -13,6 +13,7 @@ interface LobbyProps {
   onJoinRoom: (roomId: string) => void;
   onLocalGame: (config: TimerConfig) => void;
   onComputerGame: (config: ComputerGameConfig) => void;
+  onScanBoard: () => void;
   connected: boolean;
 }
 
@@ -28,7 +29,7 @@ const TIME_PRESETS: { label: string; time: number; increment: number }[] = [
   { label: '30 Min', time: 1800, increment: 0 },
 ];
 
-export default function Lobby({ onCreateRoom, onJoinRoom, onLocalGame, onComputerGame, connected }: LobbyProps) {
+export default function Lobby({ onCreateRoom, onJoinRoom, onLocalGame, onComputerGame, onScanBoard, connected }: LobbyProps) {
   const [joinCode, setJoinCode] = useState('');
   const [selectedPreset, setSelectedPreset] = useState(4); // 5+3 default
   const [customTime, setCustomTime] = useState(5);
@@ -121,6 +122,15 @@ export default function Lobby({ onCreateRoom, onJoinRoom, onLocalGame, onCompute
           </h1>
           <p className="text-gray-400 mt-1 text-sm">Klassisches Schach - Zwei Spieler</p>
         </div>
+
+        {/* Scan board button */}
+        <button
+          onClick={onScanBoard}
+          className="w-full mb-4 py-3 bg-gradient-to-r from-purple-600/80 to-pink-600/80 hover:from-purple-500 hover:to-pink-500 text-white font-medium rounded-xl transition-all active:scale-[0.98] flex items-center justify-center gap-2 border border-purple-500/30"
+        >
+          <svg xmlns="http://www.w3.org/2000/svg" className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
+          Brett scannen & weiterspielen
+        </button>
 
         {/* Connection status */}
         <div className={`flex items-center justify-center gap-2 mb-6 text-sm ${connected ? 'text-green-400' : 'text-red-400'}`}>

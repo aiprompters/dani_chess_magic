@@ -8,11 +8,12 @@ import { useStockfish } from '../hooks/useStockfish';
 
 interface LocalGameViewProps {
   timerConfig: TimerConfig;
+  startFen?: string;
   onBack: () => void;
 }
 
-export default function LocalGameView({ timerConfig, onBack }: LocalGameViewProps) {
-  const chessRef = useRef(new Chess());
+export default function LocalGameView({ timerConfig, startFen, onBack }: LocalGameViewProps) {
+  const chessRef = useRef(startFen ? new Chess(startFen) : new Chess());
   const [gameState, setGameState] = useState<GameState>(buildGameState(chessRef.current));
   const { getMove: getHintMove, loading: hintLoading, hint, clearHint } = useStockfish();
   const [timerState, setTimerState] = useState<TimerState>({

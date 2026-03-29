@@ -10,11 +10,12 @@ interface ComputerGameViewProps {
   timerConfig: TimerConfig;
   computerColor: 'w' | 'b';
   depth: number;
+  startFen?: string;
   onBack: () => void;
 }
 
-export default function ComputerGameView({ timerConfig, computerColor, depth, onBack }: ComputerGameViewProps) {
-  const chessRef = useRef(new Chess());
+export default function ComputerGameView({ timerConfig, computerColor, depth, startFen, onBack }: ComputerGameViewProps) {
+  const chessRef = useRef(startFen ? new Chess(startFen) : new Chess());
   const [gameState, setGameState] = useState<GameState>(buildGameState(chessRef.current));
   const [timerState, setTimerState] = useState<TimerState>({
     white: timerConfig.initialTime * 1000,
@@ -123,9 +124,9 @@ export default function ComputerGameView({ timerConfig, computerColor, depth, on
     }
   }, [computerColor, depth, gameOver, gameStarted, timerConfig.increment, getComputerMove, checkGameEnd]);
 
-  // Computer makes first move if playing white
+  // Computer makes first move if it's the computer's turn at start
   useEffect(() => {
-    if (computerColor === 'w' && chessRef.current.turn() === 'w' && !gameStarted && !gameOver) {
+    if (chessRef.current.turn() === computerColor && !gameStarted && !gameOver) {
       doComputerMove();
     }
   }, []); // eslint-disable-line react-hooks/exhaustive-deps

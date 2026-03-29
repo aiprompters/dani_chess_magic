@@ -6,4 +6,7 @@ services:
     environment:
       - NODE_ENV=production
       - PORT=3001
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+    env_file:
+      - .env
     restart: unless-stopped

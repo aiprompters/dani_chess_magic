@@ -25,6 +25,7 @@ export default function ChessBoard({ gameState, playerColor, isFlipped, onMove, 
   const [promotion, setPromotion] = useState<{ from: string; to: string } | null>(null);
   const boardRef = useRef<HTMLDivElement>(null);
   const chess = useRef(new Chess());
+  const [, forceRender] = useState(0);
 
   // Animated flip: track rendered vs target flip state
   const [renderedFlip, setRenderedFlip] = useState(isFlipped);
@@ -32,10 +33,8 @@ export default function ChessBoard({ gameState, playerColor, isFlipped, onMove, 
 
   useEffect(() => {
     if (isFlipped !== renderedFlip && flipAnim === 'idle') {
-      // Start flip-out
       setFlipAnim('out');
       setTimeout(() => {
-        // Swap the board mid-animation
         setRenderedFlip(isFlipped);
         setFlipAnim('in');
         setTimeout(() => {
@@ -47,6 +46,7 @@ export default function ChessBoard({ gameState, playerColor, isFlipped, onMove, 
 
   useEffect(() => {
     chess.current.load(gameState.fen);
+    forceRender(n => n + 1);
   }, [gameState.fen]);
 
   const files = renderedFlip ? [...FILES].reverse() : FILES;
