@@ -1,5 +1,5 @@
-import { Chess } from 'chess.js';
-import { GameState, TimerConfig, TimerState, RoomInfo } from '../../shared/types';
+import { GameState, TimerConfig, TimerState, RoomInfo, VariantType } from '../../shared/types';
+import { RuleEngine, GameOverResult, createRuleEngine } from '../../shared/rules';
 
 export class GameRoom {
   public roomId: string;
@@ -8,17 +8,16 @@ export class GameRoom {
   public spectators: Set<string> = new Set();
   public timerConfig: TimerConfig;
 
-  private chess: Chess;
+  private engine: RuleEngine;
   private timerState: TimerState;
   private timerInterval: ReturnType<typeof setInterval> | null = null;
   private lastTickTime: number = 0;
   private gameStarted: boolean = false;
-  private capturedPieces: { w: string[]; b: string[] } = { w: [], b: [] };
 
-  constructor(roomId: string, timerConfig: TimerConfig) {
+  constructor(roomId: string, timerConfig: TimerConfig, variant: VariantType = 'standard') {
     this.roomId = roomId;
     this.timerConfig = timerConfig;
-    this.chess = new Chess();
+    this.engine = createRuleEngine({ variant });
     this.timerState = {
       white: timerConfig.initialTime * 1000,
       black: timerConfig.initialTime * 1000,
@@ -57,43 +56,29 @@ export class GameRoom {
   }
 
   makeMove(socketId: string, from: string, to: string, promotion?: string): GameState | null {
-    const turn = this.chess.turn();
+    const turn = this.engine.getTurn();
     if (turn === 'w' && socketId !== this.white) return null;
     if (turn === 'b' && socketId !== this.black) return null;
 
-    // Track captures
-    const targetSquare = this.chess.get(to as any);
+    const move = this.engine.makeMove({ from, to, promotion });
+    if (!move) return null;
 
-    try {
-      const move = this.chess.move({ from, to, promotion: promotion || 'q' });
-      if (!move) return null;
-
-      if (move.captured) {
-        // Captured piece belongs to the opponent
-        const capturedBy = move.color; // who captured
-        const opponent = capturedBy === 'w' ? 'b' : 'w';
-        this.capturedPieces[capturedBy].push(move.captured);
+    // Add increment (skip during sub-moves in DoubleMove variant)
+    if (this.gameStarted && !this.engine.hasRemainingSubMoves()) {
+      if (turn === 'w') {
+        this.timerState.white += this.timerConfig.increment * 1000;
+      } else {
+        this.timerState.black += this.timerConfig.increment * 1000;
       }
-
-      // Add increment to the player who just moved
-      if (this.gameStarted) {
-        if (turn === 'w') {
-          this.timerState.white += this.timerConfig.increment * 1000;
-        } else {
-          this.timerState.black += this.timerConfig.increment * 1000;
-        }
-      }
-
-      // Start timer on first move
-      if (!this.gameStarted && this.isFull) {
-        this.gameStarted = true;
-        this.startTimer();
-      }
-
-      return this.getGameState({ from, to });
-    } catch {
-      return null;
     }
+
+    // Start timer on first move
+    if (!this.gameStarted && this.isFull) {
+      this.gameStarted = true;
+      this.startTimer();
+    }
+
+    return this.getGameState({ from, to });
   }
 
   private startTimer() {
@@ -103,13 +88,12 @@ export class GameRoom {
       const elapsed = now - this.lastTickTime;
       this.lastTickTime = now;
 
-      if (this.chess.turn() === 'w') {
+      if (this.engine.getTurn() === 'w') {
         this.timerState.white -= elapsed;
       } else {
         this.timerState.black -= elapsed;
       }
 
-      // Check for time-out
       if (this.timerState.white <= 0) {
         this.timerState.white = 0;
         this.stopTimer();
@@ -138,21 +122,12 @@ export class GameRoom {
     return null;
   }
 
+  getGameOverResult(): GameOverResult {
+    return this.engine.getGameOverResult();
+  }
+
   getGameState(lastMove?: { from: string; to: string }): GameState {
-    return {
-      fen: this.chess.fen(),
-      turn: this.chess.turn() as 'w' | 'b',
-      isCheck: this.chess.isCheck(),
-      isCheckmate: this.chess.isCheckmate(),
-      isStalemate: this.chess.isStalemate(),
-      isDraw: this.chess.isDraw(),
-      isGameOver: this.chess.isGameOver(),
-      lastMove,
-      capturedPieces: {
-        w: [...this.capturedPieces.w],
-        b: [...this.capturedPieces.b],
-      },
-    };
+    return this.engine.buildGameState(lastMove);
   }
 
   getRoomInfo(): RoomInfo {

@@ -1,3 +1,5 @@
+export type VariantType = 'standard' | 'forcedCapture' | 'doubleMove' | 'kingOfTheHill';
+
 export interface GameState {
   fen: string;
   turn: 'w' | 'b';
@@ -8,6 +10,8 @@ export interface GameState {
   isGameOver: boolean;
   lastMove?: { from: string; to: string };
   capturedPieces: { w: string[]; b: string[] };
+  variant?: VariantType;
+  hasRemainingSubMoves?: boolean;
 }
 
 export interface TimerConfig {
@@ -40,7 +44,7 @@ export interface ServerToClientEvents {
 }
 
 export interface ClientToServerEvents {
-  'room:create': (config: TimerConfig, callback: (roomId: string) => void) => void;
+  'room:create': (config: TimerConfig & { variant?: VariantType }, callback: (roomId: string) => void) => void;
   'room:join': (roomId: string) => void;
   'game:move': (move: { from: string; to: string; promotion?: string }) => void;
   'game:resign': () => void;

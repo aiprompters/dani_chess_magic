@@ -3,6 +3,7 @@ import ReactDOM from 'react-dom';
 import { Chess, Square } from 'chess.js';
 import { getPieceSvg } from './ChessPieces';
 import { GameState } from '../../../shared/types';
+import { RuleEngine } from '../../../shared/rules';
 import PromotionDialog from './PromotionDialog';
 
 interface ChessBoardProps {
@@ -12,19 +13,20 @@ interface ChessBoardProps {
   onMove: (from: string, to: string, promotion?: string) => void;
   disabled?: boolean;
   hintMove?: { from: string; to: string } | null;
+  ruleEngine?: RuleEngine;
 }
 
 const FILES = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'];
 const RANKS = ['8', '7', '6', '5', '4', '3', '2', '1'];
 
-export default function ChessBoard({ gameState, playerColor, isFlipped, onMove, disabled, hintMove }: ChessBoardProps) {
+export default function ChessBoard({ gameState, playerColor, isFlipped, onMove, disabled, hintMove, ruleEngine }: ChessBoardProps) {
   const [selectedSquare, setSelectedSquare] = useState<string | null>(null);
   const [legalMoves, setLegalMoves] = useState<string[]>([]);
   const [dragPiece, setDragPiece] = useState<string | null>(null);
   const [dragPos, setDragPos] = useState<{ x: number; y: number } | null>(null);
   const [promotion, setPromotion] = useState<{ from: string; to: string } | null>(null);
   const boardRef = useRef<HTMLDivElement>(null);
-  const chess = useRef(new Chess());
+  const chessFallback = useRef(new Chess());
   const [, forceRender] = useState(0);
 
   // Animated flip: track rendered vs target flip state
@@ -45,7 +47,12 @@ export default function ChessBoard({ gameState, playerColor, isFlipped, onMove, 
   }, [isFlipped, renderedFlip, flipAnim]);
 
   useEffect(() => {
-    chess.current.load(gameState.fen);
+    if (ruleEngine) {
+      // Sync a separate read-only copy so we never mutate the parent's engine
+      chessFallback.current.load(gameState.fen);
+    } else {
+      chessFallback.current.load(gameState.fen);
+    }
     forceRender(n => n + 1);
   }, [gameState.fen]);
 
@@ -54,7 +61,6 @@ export default function ChessBoard({ gameState, playerColor, isFlipped, onMove, 
 
   const isLocal = playerColor === 'local';
   const currentTurn = gameState.turn;
-  // In local mode, both colors can move on their turn
   const canMoveColor = isLocal ? currentTurn : playerColor;
   const isMyTurn = isLocal ? true : playerColor === currentTurn;
 
@@ -75,15 +81,24 @@ export default function ChessBoard({ gameState, playerColor, isFlipped, onMove, 
 
   const getLegalMovesForSquare = useCallback((square: string): string[] => {
     try {
-      const moves = chess.current.moves({ square: square as Square, verbose: true });
+      if (ruleEngine) {
+        // Use ruleEngine for variant-aware legal moves, but sync it first
+        ruleEngine.loadFen(chessFallback.current.fen());
+        return ruleEngine.getLegalMoves(square).map(m => m.to);
+      }
+      const moves = chessFallback.current.moves({ square: square as Square, verbose: true });
       return moves.map(m => m.to);
     } catch {
       return [];
     }
+  }, [ruleEngine]);
+
+  const getPieceAt = useCallback((square: string) => {
+    return chessFallback.current.get(square as Square);
   }, []);
 
   const isPromotionMove = (from: string, to: string): boolean => {
-    const piece = chess.current.get(from as Square);
+    const piece = getPieceAt(from);
     if (!piece || piece.type !== 'p') return false;
     const toRank = to[1];
     return (piece.color === 'w' && toRank === '8') || (piece.color === 'b' && toRank === '1');
@@ -103,7 +118,7 @@ export default function ChessBoard({ gameState, playerColor, isFlipped, onMove, 
   const handleSquareClick = useCallback((square: string) => {
     if (disabled || playerColor === 'spectator') return;
 
-    const piece = chess.current.get(square as Square);
+    const piece = getPieceAt(square);
 
     if (selectedSquare) {
       if (legalMoves.includes(square)) {
@@ -124,12 +139,12 @@ export default function ChessBoard({ gameState, playerColor, isFlipped, onMove, 
       setSelectedSquare(square);
       setLegalMoves(getLegalMovesForSquare(square));
     }
-  }, [selectedSquare, legalMoves, canMoveColor, isMyTurn, disabled, playerColor, getLegalMovesForSquare, tryMove]);
+  }, [selectedSquare, legalMoves, canMoveColor, isMyTurn, disabled, playerColor, getLegalMovesForSquare, tryMove, getPieceAt]);
 
   const handlePointerDown = useCallback((e: React.PointerEvent, square: string) => {
     if (disabled || playerColor === 'spectator') return;
 
-    const piece = chess.current.get(square as Square);
+    const piece = getPieceAt(square);
     if (!piece || piece.color !== canMoveColor || !isMyTurn) {
       handleSquareClick(square);
       return;
@@ -141,7 +156,7 @@ export default function ChessBoard({ gameState, playerColor, isFlipped, onMove, 
     setDragPos({ x: e.clientX, y: e.clientY });
     setSelectedSquare(square);
     setLegalMoves(getLegalMovesForSquare(square));
-  }, [disabled, playerColor, canMoveColor, isMyTurn, getLegalMovesForSquare, handleSquareClick]);
+  }, [disabled, playerColor, canMoveColor, isMyTurn, getLegalMovesForSquare, handleSquareClick, getPieceAt]);
 
   const handlePointerMove = useCallback((e: React.PointerEvent) => {
     if (!dragPiece) return;
@@ -187,7 +202,7 @@ export default function ChessBoard({ gameState, playerColor, isFlipped, onMove, 
         {ranks.map((rank) =>
           files.map((file) => {
             const square = file + rank;
-            const piece = chess.current.get(square as Square);
+            const piece = getPieceAt(square);
             const isLight = getSquareColor(file, rank);
             const isSelected = selectedSquare === square;
             const isLegal = legalMoves.includes(square);
@@ -267,7 +282,7 @@ export default function ChessBoard({ gameState, playerColor, isFlipped, onMove, 
 
   // Drag ghost rendered via portal to avoid perspective containing block
   const dragGhost = dragPiece && dragPos ? (() => {
-    const piece = chess.current.get(dragPiece as Square);
+    const piece = getPieceAt(dragPiece);
     if (!piece) return null;
     const boardRect = boardRef.current?.getBoundingClientRect();
     const squareSize = boardRect ? boardRect.width / 8 : 60;

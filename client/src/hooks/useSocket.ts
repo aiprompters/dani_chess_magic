@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { io, Socket } from 'socket.io-client';
-import { GameState, TimerState, TimerConfig, RoomInfo, ServerToClientEvents, ClientToServerEvents } from '../../../shared/types';
+import { GameState, TimerState, TimerConfig, VariantType, RoomInfo, ServerToClientEvents, ClientToServerEvents } from '../../../shared/types';
 
 type ChessSocket = Socket<ServerToClientEvents, ClientToServerEvents>;
 
@@ -15,7 +15,7 @@ export interface UseSocketReturn {
   gameOver: { winner: 'w' | 'b' | 'draw'; reason: string } | null;
   error: string | null;
   opponentJoined: boolean;
-  createRoom: (config: TimerConfig) => Promise<string>;
+  createRoom: (config: TimerConfig & { variant?: VariantType }) => Promise<string>;
   joinRoom: (roomId: string) => void;
   makeMove: (from: string, to: string, promotion?: string) => void;
   resign: () => void;
@@ -76,7 +76,7 @@ export function useSocket(): UseSocketReturn {
     };
   }, []);
 
-  const createRoom = (config: TimerConfig): Promise<string> => {
+  const createRoom = (config: TimerConfig & { variant?: VariantType }): Promise<string> => {
     return new Promise((resolve) => {
       socketRef.current?.emit('room:create', config, (id) => {
         resolve(id);

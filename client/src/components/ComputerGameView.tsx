@@ -1,22 +1,24 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { Chess } from 'chess.js';
 import ChessBoard from './ChessBoard';
 import { ClockDisplay } from './ChessClock';
 import { getPieceSymbol } from './ChessPieces';
-import { GameState, TimerConfig, TimerState } from '../../../shared/types';
+import { GameState, TimerConfig, TimerState, VariantType } from '../../../shared/types';
+import { createRuleEngine, RuleEngine } from '../../../shared/rules';
 import { useStockfish } from '../hooks/useStockfish';
+import GameSettingsModal from './GameSettingsModal';
 
 interface ComputerGameViewProps {
   timerConfig: TimerConfig;
   computerColor: 'w' | 'b';
   depth: number;
   startFen?: string;
+  variant?: VariantType;
   onBack: () => void;
 }
 
-export default function ComputerGameView({ timerConfig, computerColor, depth, startFen, onBack }: ComputerGameViewProps) {
-  const chessRef = useRef(startFen ? new Chess(startFen) : new Chess());
-  const [gameState, setGameState] = useState<GameState>(buildGameState(chessRef.current));
+export default function ComputerGameView({ timerConfig, computerColor, depth, startFen, variant = 'standard', onBack }: ComputerGameViewProps) {
+  const engineRef = useRef<RuleEngine>(createRuleEngine({ variant, fen: startFen }));
+  const [gameState, setGameState] = useState<GameState>(engineRef.current.buildGameState());
   const [timerState, setTimerState] = useState<TimerState>({
     white: timerConfig.initialTime * 1000,
     black: timerConfig.initialTime * 1000,
@@ -26,11 +28,22 @@ export default function ComputerGameView({ timerConfig, computerColor, depth, st
   const [gameStarted, setGameStarted] = useState(false);
   const [showResignConfirm, setShowResignConfirm] = useState(false);
   const [computerThinking, setComputerThinking] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
+  const [currentVariant, setCurrentVariant] = useState(variant);
+  const [currentDepth, setCurrentDepth] = useState(depth);
+  const [engineVersion, setEngineVersion] = useState(0);
+  const [computerError, setComputerError] = useState<string | null>(null);
 
   const playerColor = computerColor === 'w' ? 'b' : 'w';
 
   const { getMove: getComputerMove } = useStockfish();
   const { getMove: getHintMove, loading: hintLoading, hint, clearHint } = useStockfish();
+
+  // Refs for values needed in doComputerMove (avoids stale closures)
+  const gameOverRef = useRef(gameOver);
+  gameOverRef.current = gameOver;
+  const gameStartedRef = useRef(gameStarted);
+  gameStartedRef.current = gameStarted;
 
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const lastTickRef = useRef(0);
@@ -51,7 +64,7 @@ export default function ComputerGameView({ timerConfig, computerColor, depth, st
       lastTickRef.current = now;
 
       setTimerState(prev => {
-        const turn = chessRef.current.turn();
+        const turn = engineRef.current.getTurn();
         const updated = { ...prev };
         if (turn === 'w') {
           updated.white = Math.max(0, prev.white - elapsed);
@@ -77,59 +90,87 @@ export default function ComputerGameView({ timerConfig, computerColor, depth, st
     return () => stopTimer();
   }, [stopTimer]);
 
-  const checkGameEnd = useCallback((chess: Chess, movingColor: 'w' | 'b') => {
-    const newState = buildGameState(chess);
-    setGameState(newState);
-
-    if (newState.isGameOver) {
+  const checkGameEnd = useCallback(() => {
+    const engine = engineRef.current;
+    if (engine.isGameOver()) {
       stopTimer();
-      if (newState.isCheckmate) {
-        setGameOver({ winner: movingColor, reason: 'Schachmatt' });
-      } else if (newState.isStalemate) {
-        setGameOver({ winner: 'draw', reason: 'Patt' });
-      } else {
-        setGameOver({ winner: 'draw', reason: 'Unentschieden' });
-      }
+      const result = engine.getGameOverResult();
+      setGameOver({
+        winner: result.winner || 'draw',
+        reason: result.reason || 'Unentschieden',
+      });
       return true;
     }
     return false;
   }, [stopTimer]);
 
   const doComputerMove = useCallback(async () => {
-    const chess = chessRef.current;
-    if (chess.isGameOver() || gameOver) return;
+    const engine = engineRef.current;
+    if (engine.isGameOver() || gameOverRef.current) return;
+
+    const fen = engine.getFen();
+    console.log('[Computer] Requesting move for FEN:', fen);
 
     setComputerThinking(true);
-    const result = await getComputerMove(chess.fen(), depth);
+    setComputerError(null);
+    const result = await getComputerMove(fen, currentDepth);
     setComputerThinking(false);
 
-    if (!result || chess.turn() !== computerColor) return;
-
-    try {
-      const turn = chess.turn();
-      chess.move({ from: result.from, to: result.to, promotion: result.promotion || undefined });
-
-      if (gameStarted) {
-        setTimerState(prev => ({
-          ...prev,
-          [turn === 'w' ? 'white' : 'black']: prev[turn === 'w' ? 'white' : 'black'] + timerConfig.increment * 1000,
-        }));
-      }
-
-      const newState = buildGameState(chess, { from: result.from, to: result.to });
-      setGameState(newState);
-      checkGameEnd(chess, turn);
-    } catch {
-      // invalid move from API
+    if (!result) {
+      console.warn('[Computer] API returned no result for FEN:', fen);
+      setComputerError(`API-Fehler (FEN: ${fen.split(' ').slice(0, 2).join(' ')}...)`);
+      return;
     }
-  }, [computerColor, depth, gameOver, gameStarted, timerConfig.increment, getComputerMove, checkGameEnd]);
+    if (engine.getTurn() !== computerColor) {
+      console.warn('[Computer] Turn changed during API call, skipping');
+      return;
+    }
 
-  // Computer makes first move if it's the computer's turn at start
+    const turn = engine.getTurn();
+
+    // Validate Stockfish move against variant rules, fallback to random legal move
+    let moveFrom = result.from;
+    let moveTo = result.to;
+    let movePromotion = result.promotion || undefined;
+
+    if (!engine.isMoveLegalInVariant({ from: moveFrom, to: moveTo, promotion: movePromotion })) {
+      const legalMoves = engine.getLegalMoves();
+      if (legalMoves.length === 0) return;
+      const random = legalMoves[Math.floor(Math.random() * legalMoves.length)];
+      moveFrom = random.from;
+      moveTo = random.to;
+      movePromotion = random.promotion;
+    }
+
+    const move = engine.makeMove({ from: moveFrom, to: moveTo, promotion: movePromotion });
+    if (!move) {
+      console.warn('[Computer] makeMove failed for:', moveFrom, moveTo);
+      return;
+    }
+
+    if (gameStartedRef.current && !engine.hasRemainingSubMoves()) {
+      setTimerState(prev => ({
+        ...prev,
+        [turn === 'w' ? 'white' : 'black']: prev[turn === 'w' ? 'white' : 'black'] + timerConfig.increment * 1000,
+      }));
+    }
+
+    const newState = engine.buildGameState({ from: moveFrom, to: moveTo });
+    setGameState(newState);
+
+    if (!checkGameEnd()) {
+      if (engine.hasRemainingSubMoves()) {
+        setTimeout(() => doComputerMove(), 300);
+      }
+    }
+  }, [computerColor, currentDepth, timerConfig.increment, getComputerMove, checkGameEnd]);
+
+  // Computer makes first move if it's the computer's turn at start (or after new game)
   useEffect(() => {
-    if (chessRef.current.turn() === computerColor && !gameStarted && !gameOver) {
+    if (engineRef.current.getTurn() === computerColor && !gameStarted && !gameOver) {
       doComputerMove();
     }
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [engineVersion]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Computer responds after player moves
   useEffect(() => {
@@ -139,16 +180,27 @@ export default function ComputerGameView({ timerConfig, computerColor, depth, st
     }
   }, [gameState.turn, computerColor, gameOver, gameStarted, doComputerMove]);
 
-  const handleMove = useCallback((from: string, to: string, promotion?: string) => {
-    const chess = chessRef.current;
-    if (chess.turn() === computerColor) return; // not player's turn
+  // Watchdog: if it's computer's turn but nothing is happening, retry once
+  useEffect(() => {
+    if (gameState.turn !== computerColor || gameOver || computerThinking || computerError) return;
 
-    const turn = chess.turn();
-    try {
-      chess.move({ from, to, promotion: promotion || 'q' });
-    } catch {
-      return;
-    }
+    const watchdog = setTimeout(() => {
+      if (engineRef.current.getTurn() === computerColor && !computerThinking) {
+        console.warn('[Watchdog] Computer stalled — retrying move');
+        doComputerMove();
+      }
+    }, 3000);
+
+    return () => clearTimeout(watchdog);
+  }, [gameState.turn, computerColor, gameOver, computerThinking, computerError, doComputerMove]);
+
+  const handleMove = useCallback((from: string, to: string, promotion?: string) => {
+    const engine = engineRef.current;
+    if (engine.getTurn() === computerColor) return;
+
+    const turn = engine.getTurn();
+    const move = engine.makeMove({ from, to, promotion });
+    if (!move) return;
 
     clearHint();
 
@@ -157,19 +209,21 @@ export default function ComputerGameView({ timerConfig, computerColor, depth, st
       startTimer();
     }
 
-    setTimerState(prev => ({
-      ...prev,
-      [turn === 'w' ? 'white' : 'black']: prev[turn === 'w' ? 'white' : 'black'] + timerConfig.increment * 1000,
-    }));
+    if (!engine.hasRemainingSubMoves()) {
+      setTimerState(prev => ({
+        ...prev,
+        [turn === 'w' ? 'white' : 'black']: prev[turn === 'w' ? 'white' : 'black'] + timerConfig.increment * 1000,
+      }));
+    }
 
-    const newState = buildGameState(chess, { from, to });
+    const newState = engine.buildGameState({ from, to });
     setGameState(newState);
-    checkGameEnd(chess, turn);
+    checkGameEnd();
   }, [computerColor, gameStarted, timerConfig.increment, startTimer, checkGameEnd, clearHint]);
 
   const handleHint = () => {
-    if (!hintLoading && !gameOver && chessRef.current.turn() === playerColor) {
-      getHintMove(chessRef.current.fen(), 12);
+    if (!hintLoading && !gameOver && engineRef.current.getTurn() === playerColor) {
+      getHintMove(engineRef.current.getFen(), 12);
     }
   };
 
@@ -181,8 +235,8 @@ export default function ComputerGameView({ timerConfig, computerColor, depth, st
 
   const handleNewGame = () => {
     stopTimer();
-    chessRef.current = new Chess();
-    setGameState(buildGameState(chessRef.current));
+    engineRef.current = createRuleEngine({ variant: currentVariant });
+    setGameState(engineRef.current.buildGameState());
     setTimerState({
       white: timerConfig.initialTime * 1000,
       black: timerConfig.initialTime * 1000,
@@ -191,7 +245,42 @@ export default function ComputerGameView({ timerConfig, computerColor, depth, st
     setGameStarted(false);
     setComputerThinking(false);
     setShowResignConfirm(false);
+    setEngineVersion(v => v + 1);
     clearHint();
+  };
+
+  const applySettings = (settings: { whiteTime?: number; blackTime?: number; turn?: 'w' | 'b'; variant?: VariantType; depth?: number }) => {
+    if (settings.whiteTime !== undefined || settings.blackTime !== undefined) {
+      setTimerState(prev => ({
+        white: settings.whiteTime ?? prev.white,
+        black: settings.blackTime ?? prev.black,
+      }));
+    }
+
+    if (settings.depth !== undefined) {
+      setCurrentDepth(settings.depth);
+    }
+
+    setComputerError(null);
+
+    const needsEngineReset = settings.turn !== undefined || settings.variant !== undefined;
+    if (needsEngineReset) {
+      const currentFen = engineRef.current.getFen();
+      const newVariant = settings.variant ?? currentVariant;
+
+      let fen = currentFen;
+      if (settings.turn) {
+        const parts = fen.split(' ');
+        parts[1] = settings.turn;
+        fen = parts.join(' ');
+      }
+
+      engineRef.current = createRuleEngine({ variant: newVariant, fen });
+      setCurrentVariant(newVariant);
+      setEngineVersion(v => v + 1);
+      const newState = engineRef.current.buildGameState();
+      setGameState(newState);
+    }
   };
 
   const topColor = isFlipped ? 'w' : 'b';
@@ -207,11 +296,13 @@ export default function ComputerGameView({ timerConfig, computerColor, depth, st
       const winnerLabel = gameOver.winner === playerColor ? 'Du gewinnst' : 'Computer gewinnt';
       return `${winnerLabel} - ${gameOver.reason}`;
     }
+    if (computerError) return `Fehler: ${computerError}`;
     if (computerThinking) return 'Computer denkt nach...';
+    if (gameState.turn === computerColor && !computerThinking) return 'Computer bereitet Zug vor...';
     if (gameState.isCheck) {
       return `${gameState.turn === 'w' ? 'Weiß' : 'Schwarz'} ist im Schach!`;
     }
-    return gameState.turn === playerColor ? 'Du bist am Zug' : 'Computer ist am Zug';
+    return 'Du bist am Zug';
   };
 
   const renderCaptured = (color: 'w' | 'b') => {
@@ -240,7 +331,9 @@ export default function ComputerGameView({ timerConfig, computerColor, depth, st
               : gameOver.winner === 'draw'
                 ? 'bg-gray-600/30 text-gray-300'
                 : 'bg-red-600/30 text-red-300'
-            : computerThinking
+            : computerError
+              ? 'bg-red-600/20 text-red-300'
+              : (computerThinking || gameState.turn === computerColor)
               ? 'bg-purple-600/20 text-purple-300'
               : gameState.isCheck
                 ? 'bg-red-600/20 text-red-300'
@@ -271,6 +364,7 @@ export default function ComputerGameView({ timerConfig, computerColor, depth, st
         onMove={handleMove}
         disabled={!!gameOver || gameState.turn === computerColor}
         hintMove={hint ? { from: hint.from, to: hint.to } : null}
+        ruleEngine={engineRef.current}
       />
 
       {/* Bottom timer */}
@@ -315,6 +409,15 @@ export default function ComputerGameView({ timerConfig, computerColor, depth, st
           </button>
         )}
 
+        {/* Settings */}
+        <button
+          onClick={() => setShowSettings(true)}
+          className="py-2 px-3 bg-gray-700 hover:bg-gray-600 text-gray-300 text-sm font-medium rounded-lg transition-colors shadow-md flex items-center gap-1.5"
+          title="Einstellungen"
+        >
+          <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+        </button>
+
         {!gameOver ? (
           showResignConfirm ? (
             <>
@@ -356,31 +459,20 @@ export default function ComputerGameView({ timerConfig, computerColor, depth, st
           </>
         )}
       </div>
+
+      {/* Settings Modal */}
+      {showSettings && (
+        <GameSettingsModal
+          whiteTime={timerState.white}
+          blackTime={timerState.black}
+          currentTurn={gameState.turn}
+          variant={currentVariant}
+          depth={currentDepth}
+          showDepth={true}
+          onApply={applySettings}
+          onClose={() => setShowSettings(false)}
+        />
+      )}
     </div>
   );
-}
-
-function buildGameState(chess: Chess, lastMove?: { from: string; to: string }): GameState {
-  return {
-    fen: chess.fen(),
-    turn: chess.turn() as 'w' | 'b',
-    isCheck: chess.isCheck(),
-    isCheckmate: chess.isCheckmate(),
-    isStalemate: chess.isStalemate(),
-    isDraw: chess.isDraw(),
-    isGameOver: chess.isGameOver(),
-    lastMove,
-    capturedPieces: getCapturedPieces(chess),
-  };
-}
-
-function getCapturedPieces(chess: Chess): { w: string[]; b: string[] } {
-  const history = chess.history({ verbose: true });
-  const captured: { w: string[]; b: string[] } = { w: [], b: [] };
-  for (const move of history) {
-    if (move.captured) {
-      captured[move.color].push(move.captured);
-    }
-  }
-  return captured;
 }

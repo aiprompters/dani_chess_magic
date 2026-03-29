@@ -85,6 +85,7 @@ export default function BoardScanner({ onStartLocal, onStartComputer, onBack }: 
         timerConfig,
         computerColor: playAs === 'w' ? 'b' : 'w',
         depth: DIFFICULTY_LEVELS[difficulty].depth,
+        variant: 'standard',
       }, fullFen);
     }
   };

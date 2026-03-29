@@ -1,20 +1,22 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { Chess } from 'chess.js';
 import ChessBoard from './ChessBoard';
 import { ClockDisplay } from './ChessClock';
 import { getPieceSymbol } from './ChessPieces';
-import { GameState, TimerConfig, TimerState } from '../../../shared/types';
+import { GameState, TimerConfig, TimerState, VariantType } from '../../../shared/types';
+import { createRuleEngine, RuleEngine } from '../../../shared/rules';
 import { useStockfish } from '../hooks/useStockfish';
+import GameSettingsModal from './GameSettingsModal';
 
 interface LocalGameViewProps {
   timerConfig: TimerConfig;
   startFen?: string;
+  variant?: VariantType;
   onBack: () => void;
 }
 
-export default function LocalGameView({ timerConfig, startFen, onBack }: LocalGameViewProps) {
-  const chessRef = useRef(startFen ? new Chess(startFen) : new Chess());
-  const [gameState, setGameState] = useState<GameState>(buildGameState(chessRef.current));
+export default function LocalGameView({ timerConfig, startFen, variant = 'standard', onBack }: LocalGameViewProps) {
+  const engineRef = useRef<RuleEngine>(createRuleEngine({ variant, fen: startFen }));
+  const [gameState, setGameState] = useState<GameState>(engineRef.current.buildGameState());
   const { getMove: getHintMove, loading: hintLoading, hint, clearHint } = useStockfish();
   const [timerState, setTimerState] = useState<TimerState>({
     white: timerConfig.initialTime * 1000,
@@ -25,6 +27,8 @@ export default function LocalGameView({ timerConfig, startFen, onBack }: LocalGa
   const [gameOver, setGameOver] = useState<{ winner: 'w' | 'b' | 'draw'; reason: string } | null>(null);
   const [gameStarted, setGameStarted] = useState(false);
   const [showResignConfirm, setShowResignConfirm] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
+  const [currentVariant, setCurrentVariant] = useState(variant);
 
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const lastTickRef = useRef(0);
@@ -47,7 +51,7 @@ export default function LocalGameView({ timerConfig, startFen, onBack }: LocalGa
       lastTickRef.current = now;
 
       setTimerState(prev => {
-        const turn = chessRef.current.turn();
+        const turn = engineRef.current.getTurn();
         const updated = { ...prev };
         if (turn === 'w') {
           updated.white = Math.max(0, prev.white - elapsed);
@@ -74,62 +78,56 @@ export default function LocalGameView({ timerConfig, startFen, onBack }: LocalGa
   }, [stopTimer]);
 
   const handleMove = useCallback((from: string, to: string, promotion?: string) => {
-    const chess = chessRef.current;
-    const turn = chess.turn();
+    const engine = engineRef.current;
+    const turn = engine.getTurn();
 
-    try {
-      const move = chess.move({ from, to, promotion: promotion || 'q' });
-      if (!move) return;
+    const move = engine.makeMove({ from, to, promotion });
+    if (!move) return;
 
-      clearHint();
+    clearHint();
 
-      // Add increment
-      if (gameStarted) {
-        setTimerState(prev => ({
-          ...prev,
-          [turn === 'w' ? 'white' : 'black']: prev[turn === 'w' ? 'white' : 'black'] + timerConfig.increment * 1000,
-        }));
-      }
-
-      if (!gameStarted) {
-        setGameStarted(true);
-        startTimer();
-      }
-
-      const newState = buildGameState(chess, { from, to });
-      setGameState(newState);
-
-      // Auto-flip board
-      if (autoFlip) {
-        setIsFlipped(chess.turn() === 'b');
-      }
-
-      if (newState.isGameOver) {
-        stopTimer();
-        if (newState.isCheckmate) {
-          setGameOver({ winner: turn, reason: 'Schachmatt' });
-        } else if (newState.isStalemate) {
-          setGameOver({ winner: 'draw', reason: 'Patt' });
-        } else {
-          setGameOver({ winner: 'draw', reason: 'Unentschieden' });
-        }
-      }
-    } catch {
-      // invalid move
+    // Add increment (skip during sub-moves)
+    if (gameStarted && !engine.hasRemainingSubMoves()) {
+      setTimerState(prev => ({
+        ...prev,
+        [turn === 'w' ? 'white' : 'black']: prev[turn === 'w' ? 'white' : 'black'] + timerConfig.increment * 1000,
+      }));
     }
-  }, [gameStarted, autoFlip, timerConfig.increment, startTimer, stopTimer]);
+
+    if (!gameStarted) {
+      setGameStarted(true);
+      startTimer();
+    }
+
+    const newState = engine.buildGameState({ from, to });
+    setGameState(newState);
+
+    // Auto-flip board (only when turn actually changes)
+    if (autoFlip && !engine.hasRemainingSubMoves()) {
+      setIsFlipped(engine.getTurn() === 'b');
+    }
+
+    if (engine.isGameOver()) {
+      stopTimer();
+      const result = engine.getGameOverResult();
+      setGameOver({
+        winner: result.winner || 'draw',
+        reason: result.reason || 'Unentschieden',
+      });
+    }
+  }, [gameStarted, autoFlip, timerConfig.increment, startTimer, stopTimer, clearHint]);
 
   const handleResign = () => {
     stopTimer();
-    const loser = chessRef.current.turn();
+    const loser = engineRef.current.getTurn();
     setGameOver({ winner: loser === 'w' ? 'b' : 'w', reason: 'Aufgabe' });
     setShowResignConfirm(false);
   };
 
   const handleNewGame = () => {
     stopTimer();
-    chessRef.current = new Chess();
-    setGameState(buildGameState(chessRef.current));
+    engineRef.current = createRuleEngine({ variant: currentVariant });
+    setGameState(engineRef.current.buildGameState());
     setTimerState({
       white: timerConfig.initialTime * 1000,
       black: timerConfig.initialTime * 1000,
@@ -138,6 +136,32 @@ export default function LocalGameView({ timerConfig, startFen, onBack }: LocalGa
     setGameStarted(false);
     setIsFlipped(false);
     setShowResignConfirm(false);
+  };
+
+  const applySettings = (settings: { whiteTime?: number; blackTime?: number; turn?: 'w' | 'b'; variant?: VariantType }) => {
+    if (settings.whiteTime !== undefined || settings.blackTime !== undefined) {
+      setTimerState(prev => ({
+        white: settings.whiteTime ?? prev.white,
+        black: settings.blackTime ?? prev.black,
+      }));
+    }
+
+    const needsEngineReset = settings.turn !== undefined || settings.variant !== undefined;
+    if (needsEngineReset) {
+      const currentFen = engineRef.current.getFen();
+      const newVariant = settings.variant ?? currentVariant;
+
+      let fen = currentFen;
+      if (settings.turn) {
+        const parts = fen.split(' ');
+        parts[1] = settings.turn;
+        fen = parts.join(' ');
+      }
+
+      engineRef.current = createRuleEngine({ variant: newVariant, fen });
+      setCurrentVariant(newVariant);
+      setGameState(engineRef.current.buildGameState());
+    }
   };
 
   const topColor = isFlipped ? 'w' : 'b';
@@ -209,6 +233,7 @@ export default function LocalGameView({ timerConfig, startFen, onBack }: LocalGa
         onMove={handleMove}
         disabled={!!gameOver}
         hintMove={hint ? { from: hint.from, to: hint.to } : null}
+        ruleEngine={engineRef.current}
       />
 
       {/* Player timer */}
@@ -251,7 +276,7 @@ export default function LocalGameView({ timerConfig, startFen, onBack }: LocalGa
         {/* Hint */}
         {!gameOver && (
           <button
-            onClick={() => !hintLoading && getHintMove(chessRef.current.fen(), 12)}
+            onClick={() => !hintLoading && getHintMove(engineRef.current.getFen(), 12)}
             disabled={hintLoading}
             className={`py-2 px-4 text-sm font-medium rounded-lg transition-colors shadow-md flex items-center gap-1.5 ${
               hintLoading
@@ -265,6 +290,15 @@ export default function LocalGameView({ timerConfig, startFen, onBack }: LocalGa
             {hintLoading ? 'Denke...' : hint ? `Tipp: ${hint.san}` : 'Tipp'}
           </button>
         )}
+
+        {/* Settings */}
+        <button
+          onClick={() => setShowSettings(true)}
+          className="py-2 px-3 bg-gray-700 hover:bg-gray-600 text-gray-300 text-sm font-medium rounded-lg transition-colors shadow-md flex items-center gap-1.5"
+          title="Einstellungen"
+        >
+          <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+        </button>
 
         {!gameOver ? (
           showResignConfirm ? (
@@ -307,31 +341,18 @@ export default function LocalGameView({ timerConfig, startFen, onBack }: LocalGa
           </>
         )}
       </div>
+
+      {/* Settings Modal */}
+      {showSettings && (
+        <GameSettingsModal
+          whiteTime={timerState.white}
+          blackTime={timerState.black}
+          currentTurn={gameState.turn}
+          variant={currentVariant}
+          onApply={applySettings}
+          onClose={() => setShowSettings(false)}
+        />
+      )}
     </div>
   );
-}
-
-function buildGameState(chess: Chess, lastMove?: { from: string; to: string }): GameState {
-  return {
-    fen: chess.fen(),
-    turn: chess.turn() as 'w' | 'b',
-    isCheck: chess.isCheck(),
-    isCheckmate: chess.isCheckmate(),
-    isStalemate: chess.isStalemate(),
-    isDraw: chess.isDraw(),
-    isGameOver: chess.isGameOver(),
-    lastMove,
-    capturedPieces: getCapturedPieces(chess),
-  };
-}
-
-function getCapturedPieces(chess: Chess): { w: string[]; b: string[] } {
-  const history = chess.history({ verbose: true });
-  const captured: { w: string[]; b: string[] } = { w: [], b: [] };
-  for (const move of history) {
-    if (move.captured) {
-      captured[move.color].push(move.captured);
-    }
-  }
-  return captured;
 }

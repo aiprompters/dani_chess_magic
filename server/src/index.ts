@@ -12,7 +12,7 @@ import { Server } from 'socket.io';
 import cors from 'cors';
 import { GameRoom } from './GameRoom';
 import { analyzeBoardImage } from './boardRecognition';
-import { ServerToClientEvents, ClientToServerEvents, TimerConfig } from '../../shared/types';
+import { ServerToClientEvents, ClientToServerEvents, TimerConfig, VariantType } from '../../shared/types';
 
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 
@@ -73,9 +73,9 @@ function generateRoomId(): string {
 io.on('connection', (socket) => {
   console.log(`Player connected: ${socket.id}`);
 
-  socket.on('room:create', (config: TimerConfig, callback) => {
+  socket.on('room:create', (config: TimerConfig & { variant?: VariantType }, callback) => {
     const roomId = generateRoomId();
-    const room = new GameRoom(roomId, config);
+    const room = new GameRoom(roomId, config, config.variant || 'standard');
     rooms.set(roomId, room);
 
     const color = room.addPlayer(socket.id);
@@ -136,17 +136,11 @@ io.on('connection', (socket) => {
 
     if (state.isGameOver) {
       room.stopTimer();
-      let winner: 'w' | 'b' | 'draw' = 'draw';
-      let reason = 'Unentschieden';
-
-      if (state.isCheckmate) {
-        winner = state.turn === 'w' ? 'b' : 'w';
-        reason = 'Schachmatt';
-      } else if (state.isStalemate) {
-        reason = 'Patt';
-      }
-
-      io.to(roomId).emit('game:over', { winner, reason });
+      const result = room.getGameOverResult();
+      io.to(roomId).emit('game:over', {
+        winner: result.winner || 'draw',
+        reason: result.reason || 'Unentschieden',
+      });
     }
   });
 

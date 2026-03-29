@@ -1,21 +1,39 @@
 import { useState } from 'react';
-import { TimerConfig } from '../../../shared/types';
+import { TimerConfig, VariantType } from '../../../shared/types';
 import { DIFFICULTY_LEVELS } from '../hooks/useStockfish';
 
 export interface ComputerGameConfig {
   timerConfig: TimerConfig;
   computerColor: 'w' | 'b';
   depth: number;
+  variant: VariantType;
+}
+
+export interface LocalGameConfig {
+  timerConfig: TimerConfig;
+  variant: VariantType;
+}
+
+export interface OnlineGameConfig {
+  timerConfig: TimerConfig;
+  variant: VariantType;
 }
 
 interface LobbyProps {
-  onCreateRoom: (config: TimerConfig) => void;
+  onCreateRoom: (config: OnlineGameConfig) => void;
   onJoinRoom: (roomId: string) => void;
-  onLocalGame: (config: TimerConfig) => void;
+  onLocalGame: (config: LocalGameConfig) => void;
   onComputerGame: (config: ComputerGameConfig) => void;
   onScanBoard: () => void;
   connected: boolean;
 }
+
+const VARIANT_OPTIONS: { value: VariantType; label: string; description: string }[] = [
+  { value: 'standard', label: 'Standard', description: 'Klassische Schachregeln' },
+  { value: 'forcedCapture', label: 'Schlagzwang', description: 'Weiß muss schlagen wenn möglich' },
+  { value: 'doubleMove', label: 'Doppelzug', description: 'Schwarz darf 2 Züge machen' },
+  { value: 'kingOfTheHill', label: 'King of the Hill', description: 'König im Zentrum gewinnt' },
+];
 
 const TIME_PRESETS: { label: string; time: number; increment: number }[] = [
   { label: '1 Min', time: 60, increment: 0 },
@@ -38,6 +56,7 @@ export default function Lobby({ onCreateRoom, onJoinRoom, onLocalGame, onCompute
   const [tab, setTab] = useState<'local' | 'computer' | 'online' | 'join'>('local');
   const [difficulty, setDifficulty] = useState(2); // Mittel
   const [playAs, setPlayAs] = useState<'w' | 'b' | 'random'>('w');
+  const [variant, setVariant] = useState<VariantType>('standard');
 
   const getTimerConfig = (): TimerConfig => {
     return useCustom
@@ -50,6 +69,33 @@ export default function Lobby({ onCreateRoom, onJoinRoom, onLocalGame, onCompute
       onJoinRoom(joinCode.trim().toUpperCase());
     }
   };
+
+  const variantSelector = (
+    <>
+      <h2 className="text-lg font-semibold mb-3">Spielvariante</h2>
+      <div className="grid grid-cols-2 gap-2 mb-4">
+        {VARIANT_OPTIONS.map((v) => (
+          <button
+            key={v.value}
+            onClick={() => setVariant(v.value)}
+            className={`py-2.5 px-3 rounded-lg text-sm font-medium transition-all text-center ${
+              variant === v.value
+                ? 'bg-amber-600 text-white shadow-lg ring-2 ring-amber-400/50'
+                : 'bg-gray-700/50 text-gray-300 hover:bg-gray-600/50'
+            }`}
+            title={v.description}
+          >
+            {v.label}
+          </button>
+        ))}
+      </div>
+      {variant !== 'standard' && (
+        <p className="text-xs text-amber-400/70 mb-4">
+          {VARIANT_OPTIONS.find(v => v.value === variant)?.description}
+        </p>
+      )}
+    </>
+  );
 
   const timerSelector = (
     <>
@@ -185,10 +231,11 @@ export default function Lobby({ onCreateRoom, onJoinRoom, onLocalGame, onCompute
                 </div>
               </div>
 
+              {variantSelector}
               {timerSelector}
 
               <button
-                onClick={() => onLocalGame(getTimerConfig())}
+                onClick={() => onLocalGame({ timerConfig: getTimerConfig(), variant })}
                 className="w-full py-3 bg-gradient-to-r from-green-500 to-green-600 hover:from-green-400 hover:to-green-500 text-white font-bold rounded-xl shadow-lg shadow-green-500/25 transition-all active:scale-[0.98]"
               >
                 Spiel starten
@@ -242,6 +289,7 @@ export default function Lobby({ onCreateRoom, onJoinRoom, onLocalGame, onCompute
                 ))}
               </div>
 
+              {variantSelector}
               {timerSelector}
 
               <button
@@ -253,6 +301,7 @@ export default function Lobby({ onCreateRoom, onJoinRoom, onLocalGame, onCompute
                     timerConfig: getTimerConfig(),
                     computerColor,
                     depth: DIFFICULTY_LEVELS[difficulty].depth,
+                    variant,
                   });
                 }}
                 className="w-full py-3 bg-gradient-to-r from-purple-500 to-purple-600 hover:from-purple-400 hover:to-purple-500 text-white font-bold rounded-xl shadow-lg shadow-purple-500/25 transition-all active:scale-[0.98]"
@@ -264,10 +313,11 @@ export default function Lobby({ onCreateRoom, onJoinRoom, onLocalGame, onCompute
 
           {tab === 'online' && (
             <>
+              {variantSelector}
               {timerSelector}
 
               <button
-                onClick={() => onCreateRoom(getTimerConfig())}
+                onClick={() => onCreateRoom({ timerConfig: getTimerConfig(), variant })}
                 disabled={!connected}
                 className="w-full py-3 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-white font-bold rounded-xl shadow-lg shadow-amber-500/25 transition-all disabled:opacity-50 disabled:cursor-not-allowed active:scale-[0.98]"
               >

@@ -1,8 +1,9 @@
-import { useState } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import ChessBoard from './ChessBoard';
 import { ClockDisplay } from './ChessClock';
 import { getPieceSymbol } from './ChessPieces';
-import { GameState, TimerState } from '../../../shared/types';
+import { GameState, TimerState, VariantType } from '../../../shared/types';
+import { createRuleEngine, RuleEngine } from '../../../shared/rules';
 import { useStockfish } from '../hooks/useStockfish';
 
 interface GameViewProps {
@@ -14,6 +15,7 @@ interface GameViewProps {
   gameOver: { winner: 'w' | 'b' | 'draw'; reason: string } | null;
   onMove: (from: string, to: string, promotion?: string) => void;
   onResign: () => void;
+  variant?: VariantType;
 }
 
 export default function GameView({
@@ -25,11 +27,18 @@ export default function GameView({
   gameOver,
   onMove,
   onResign,
+  variant = 'standard',
 }: GameViewProps) {
   const [showResignConfirm, setShowResignConfirm] = useState(false);
   const [copied, setCopied] = useState(false);
   const [isFlipped, setIsFlipped] = useState(playerColor === 'b');
   const { getMove: getHintMove, loading: hintLoading, hint, clearHint } = useStockfish();
+
+  // Local engine mirror for UI (legal move dots)
+  const engineRef = useRef<RuleEngine>(createRuleEngine({ variant }));
+  useEffect(() => {
+    engineRef.current.loadFen(gameState.fen);
+  }, [gameState.fen]);
 
   const topColor = isFlipped ? 'w' : 'b';
   const bottomColor = isFlipped ? 'b' : 'w';
@@ -124,6 +133,7 @@ export default function GameView({
         onMove={(from, to, promo) => { clearHint(); onMove(from, to, promo); }}
         disabled={!!gameOver || !opponentJoined}
         hintMove={hint ? { from: hint.from, to: hint.to } : null}
+        ruleEngine={engineRef.current}
       />
 
       {/* Player timer + captured */}

@@ -1,15 +1,14 @@
 import { useState } from 'react';
 import { useSocket } from './hooks/useSocket';
 import Lobby from './components/Lobby';
-import { ComputerGameConfig } from './components/Lobby';
+import { ComputerGameConfig, LocalGameConfig, OnlineGameConfig } from './components/Lobby';
 import GameView from './components/GameView';
 import LocalGameView from './components/LocalGameView';
 import ComputerGameView from './components/ComputerGameView';
 import BoardScanner from './components/BoardScanner';
-import { TimerConfig } from '../../shared/types';
+import { VariantType } from '../../shared/types';
 
-interface LocalGameState {
-  timerConfig: TimerConfig;
+interface LocalGameState extends LocalGameConfig {
   startFen?: string;
 }
 
@@ -36,9 +35,11 @@ export default function App() {
   const [localGame, setLocalGame] = useState<LocalGameState | null>(null);
   const [computerGame, setComputerGame] = useState<ComputerGameState | null>(null);
   const [showScanner, setShowScanner] = useState(false);
+  const [onlineVariant, setOnlineVariant] = useState<VariantType>('standard');
 
-  const handleCreate = async (config: TimerConfig) => {
-    await createRoom(config);
+  const handleCreate = async (config: OnlineGameConfig) => {
+    setOnlineVariant(config.variant);
+    await createRoom({ ...config.timerConfig, variant: config.variant });
   };
 
   // Board scanner
@@ -47,11 +48,11 @@ export default function App() {
       <BoardScanner
         onStartLocal={(config, fen) => {
           setShowScanner(false);
-          setLocalGame({ timerConfig: config, startFen: fen });
+          setLocalGame({ timerConfig: config, variant: 'standard', startFen: fen });
         }}
         onStartComputer={(config, fen) => {
           setShowScanner(false);
-          setComputerGame({ ...config, startFen: fen });
+          setComputerGame({ ...config, variant: 'standard', startFen: fen });
         }}
         onBack={() => setShowScanner(false)}
       />
@@ -64,6 +65,7 @@ export default function App() {
       <LocalGameView
         timerConfig={localGame.timerConfig}
         startFen={localGame.startFen}
+        variant={localGame.variant}
         onBack={() => setLocalGame(null)}
       />
     );
@@ -77,6 +79,7 @@ export default function App() {
         computerColor={computerGame.computerColor}
         depth={computerGame.depth}
         startFen={computerGame.startFen}
+        variant={computerGame.variant}
         onBack={() => setComputerGame(null)}
       />
     );
@@ -95,6 +98,7 @@ export default function App() {
           gameOver={gameOver}
           onMove={makeMove}
           onResign={resign}
+          variant={onlineVariant}
         />
         {error && (
           <div className="fixed bottom-4 left-1/2 -translate-x-1/2 bg-red-600/90 text-white px-4 py-2 rounded-lg text-sm shadow-lg animate-pulse z-50">
@@ -111,7 +115,7 @@ export default function App() {
       <Lobby
         onCreateRoom={handleCreate}
         onJoinRoom={joinRoom}
-        onLocalGame={(config) => setLocalGame({ timerConfig: config })}
+        onLocalGame={(config) => setLocalGame(config)}
         onComputerGame={(config) => setComputerGame(config)}
         onScanBoard={() => setShowScanner(true)}
         connected={connected}

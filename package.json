@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "private": true,
   "scripts": {
-    "dev:server": "cd server && npx ts-node-dev --respawn src/index.ts",
+    "dev:server": "cd server && npx ts-node-dev -r tsconfig-paths/register --respawn src/index.ts",
     "dev:client": "cd client && npx vite",
     "dev": "concurrently \"npm run dev:server\" \"npm run dev:client\"",
     "build:client": "cd client && npx vite build",
