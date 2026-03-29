@@ -1,0 +1,17 @@
+{
+  "name": "beispeil-chess",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev:server": "cd server && npx ts-node-dev --respawn src/index.ts",
+    "dev:client": "cd client && npx vite",
+    "dev": "concurrently \"npm run dev:server\" \"npm run dev:client\"",
+    "build:client": "cd client && npx vite build",
+    "build:server": "cd server && npx tsc",
+    "build": "npm run build:server && npm run build:client",
+    "start": "node server/dist/index.js"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  }
+}

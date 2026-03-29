@@ -1,0 +1,63 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+* {
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+
+body {
+  margin: 0;
+  font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+  background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
+  min-height: 100vh;
+  color: white;
+  overflow-x: hidden;
+}
+
+@layer utilities {
+  .chess-piece {
+    cursor: grab;
+    user-select: none;
+    -webkit-user-select: none;
+    transition: transform 0.1s ease;
+  }
+  .chess-piece:active {
+    cursor: grabbing;
+  }
+  .chess-piece.dragging {
+    transform: scale(1.2);
+    z-index: 100;
+    opacity: 0.9;
+  }
+}
+
+/* Board flip animation */
+.board-container {
+  perspective: 1200px;
+}
+
+.board-flipper {
+  transform-style: preserve-3d;
+  transition: transform 0.7s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.board-flipper.flipping {
+  transform: rotateX(90deg) scale(0.85);
+}
+
+.board-flipper.flipping-in {
+  animation: board-flip-in 0.5s cubic-bezier(0.2, 0, 0.4, 1) forwards;
+}
+
+@keyframes board-flip-in {
+  0% {
+    transform: rotateX(-90deg) scale(0.85);
+    opacity: 0.6;
+  }
+  100% {
+    transform: rotateX(0deg) scale(1);
+    opacity: 1;
+  }
+}
